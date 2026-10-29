@@ -6,7 +6,7 @@ from botocore.config import Config
 from fastapi import FastAPI, Query
 from fastapi.middleware.cors import CORSMiddleware
 from pyproj import CRS, Transformer
-app=FastAPI(title='Territoria GOES-19 Processor',version='2.0.0')
+app=FastAPI(title='Territoria GOES-19 Processor',version='3.0.0')
 app.add_middleware(CORSMiddleware,allow_origins=['*'],allow_methods=['GET'],allow_headers=['*'])
 BUCKET='noaa-goes19'; PRODUCT='ABI-L2-FDCF'
 s3=boto3.client('s3',config=Config(signature_version=UNSIGNED,retries={'max_attempts':3}))
@@ -20,16 +20,20 @@ def latest_key():
   d=datetime.fromtimestamp(now.timestamp()-back*3600,timezone.utc); prefix=f'{PRODUCT}/{d.year}/{d.timetuple().tm_yday:03d}/{d.hour:02d}/'; res=s3.list_objects_v2(Bucket=BUCKET,Prefix=prefix); keys=[x['Key'] for x in res.get('Contents',[]) if x['Key'].endswith('.nc')]
   if keys:return sorted(keys)[-1]
  raise RuntimeError('No se encontró archivo GOES-19 reciente')
+def decoded_value(var,y,x):
+ raw=var.values[y,x]; fill=var.attrs.get('_FillValue');
+ if fill is not None and raw==fill:return None
+ return float(raw)*float(var.attrs.get('scale_factor',1.0))+float(var.attrs.get('add_offset',0.0))
 def scalar(ds,names,y,x):
  for n in names:
   if n in ds:
-   try:return float(ds[n].values[y,x])
+   try:return decoded_value(ds[n],y,x)
    except:pass
  return None
 def extract(key,slat,slon,radius):
  with tempfile.NamedTemporaryFile(suffix='.nc') as f:
-  s3.download_fileobj(BUCKET,key,f); f.flush(); ds=xr.open_dataset(f.name,engine='h5netcdf',mask_and_scale=True); mask=np.asarray(ds['Mask'].values); codes={10,11,12,13,14,15,30,31,32,33,34,35}; ys,xs=np.where(np.isin(mask.astype('int32'),list(codes)))
-  proj=ds['goes_imager_projection']; h=float(proj.perspective_point_height); crs=CRS.from_proj4(f'+proj=geos +h={h} +lon_0={float(proj.longitude_of_projection_origin)} +sweep={str(proj.sweep_angle_axis)} +ellps=GRS80'); tr=Transformer.from_crs(crs,'EPSG:4326',always_xy=True); lons,lats=tr.transform(np.asarray(ds['x'].values)[xs]*h,np.asarray(ds['y'].values)[ys]*h)
+  s3.download_fileobj(BUCKET,key,f); f.flush(); ds=xr.open_dataset(f.name,engine='h5netcdf',mask_and_scale=False); mask=np.asarray(ds['Mask'].values); codes=np.array([10,11,12,13,14,15,30,31,32,33,34,35],dtype=mask.dtype); ys,xs=np.where(np.isin(mask,codes))
+  proj=ds['goes_imager_projection']; h=float(proj.perspective_point_height); crs=CRS.from_proj4(f'+proj=geos +h={h} +lon_0={float(proj.longitude_of_projection_origin)} +sweep={str(proj.sweep_angle_axis)} +ellps=GRS80'); tr=Transformer.from_crs(crs,'EPSG:4326',always_xy=True); xv=np.asarray(ds['x'].values,dtype='float64')*float(ds['x'].attrs.get('scale_factor',1.0))+float(ds['x'].attrs.get('add_offset',0.0)); yv=np.asarray(ds['y'].values,dtype='float64')*float(ds['y'].attrs.get('scale_factor',1.0))+float(ds['y'].attrs.get('add_offset',0.0)); lons,lats=tr.transform(xv[xs]*h,yv[ys]*h)
   labels={10:'processed',11:'saturated',12:'cloudy',13:'high',14:'medium',15:'low',30:'processed-temporal',31:'saturated-temporal',32:'cloudy-temporal',33:'high-temporal',34:'medium-temporal',35:'low-temporal'}; out=[]
   for y,x,la,lo in zip(ys,xs,lats,lons):
    if not np.isfinite(la) or not np.isfinite(lo):continue
@@ -38,7 +42,7 @@ def extract(key,slat,slon,radius):
    code=int(mask[y,x]); out.append({'id':f'{key}-{y}-{x}','lat':round(float(la),6),'lon':round(float(lo),6),'distanceKm':round(km,2),'bearing':bearing(slat,slon,float(la),float(lo)),'classification':labels.get(code,str(code)),'maskCode':code,'frpMw':scalar(ds,['Power','FRP'],y,x),'temperatureK':scalar(ds,['Temp','Temperature'],y,x),'sizeKm2':scalar(ds,['Area'],y,x),'time':datetime.now(timezone.utc).isoformat()})
   ds.close(); return sorted(out,key=lambda z:z['distanceKm']),int(len(ys))
 @app.get('/')
-def root():return {'ok':True,'service':'Territoria GOES-19 Processor','version':'2.0.0','product':PRODUCT}
+def root():return {'ok':True,'service':'Territoria GOES-19 Processor','version':'3.0.0','product':PRODUCT}
 @app.get('/fires')
 def fires(lat:float=Query(...),lon:float=Query(...),radius:float=Query(2500,ge=5,le=5000),satellite:str='G19',product:str=PRODUCT):
  try:
