@@ -145,16 +145,48 @@ def extract_fire(key, slat, slon, radius):
 
 
 def glm_time(ds, value):
-    epoch = ds.attrs.get("time_coverage_start") or datetime.now(timezone.utc).isoformat()
+    """Convierte correctamente la hora GLM sin sumar dos veces la época UTC."""
     try:
+        # Con decode_times=True, xarray normalmente entrega datetime64 absoluto.
+        if isinstance(value, np.datetime64):
+            if np.isnat(value):
+                raise ValueError("fecha GLM vacia")
+            ns = value.astype("datetime64[ns]").astype("int64")
+            return datetime.fromtimestamp(ns / 1_000_000_000, timezone.utc).isoformat()
+
+        # Algunos archivos pueden entregar timedelta64 relativo al inicio de escena.
+        if isinstance(value, np.timedelta64):
+            epoch = ds.attrs.get("time_coverage_start") or datetime.now(timezone.utc).isoformat()
+            base = datetime.fromisoformat(str(epoch).replace("Z", "+00:00"))
+            seconds = float(value / np.timedelta64(1, "ns")) / 1_000_000_000
+            return (base + timedelta(seconds=seconds)).astimezone(timezone.utc).isoformat()
+
+        # datetime Python o cftime compatible.
+        if isinstance(value, datetime):
+            dt = value if value.tzinfo else value.replace(tzinfo=timezone.utc)
+            return dt.astimezone(timezone.utc).isoformat()
+
+        item = value.item() if hasattr(value, "item") else value
+        if isinstance(item, datetime):
+            dt = item if item.tzinfo else item.replace(tzinfo=timezone.utc)
+            return dt.astimezone(timezone.utc).isoformat()
+
+        epoch = ds.attrs.get("time_coverage_start") or datetime.now(timezone.utc).isoformat()
         base = datetime.fromisoformat(str(epoch).replace("Z", "+00:00"))
-    except Exception:
-        base = datetime.now(timezone.utc)
-    try:
-        seconds = float(value) * 1e-9
+        number = float(item)
+
+        # Respaldo: epoch absoluto en ns o s.
+        if abs(number) > 1e15:
+            return datetime.fromtimestamp(number / 1_000_000_000, timezone.utc).isoformat()
+        if abs(number) > 1e9:
+            return datetime.fromtimestamp(number, timezone.utc).isoformat()
+
+        # Offset numerico relativo; GLM suele usar nanosegundos tras decodificacion parcial.
+        seconds = number * 1e-9
         return (base + timedelta(seconds=seconds)).astimezone(timezone.utc).isoformat()
     except Exception:
-        return base.astimezone(timezone.utc).isoformat()
+        epoch = ds.attrs.get("time_coverage_start") or datetime.now(timezone.utc).isoformat()
+        return datetime.fromisoformat(str(epoch).replace("Z", "+00:00")).astimezone(timezone.utc).isoformat()
 
 
 def extract_glm(key, slat, slon, radius, only_argentina=True):
