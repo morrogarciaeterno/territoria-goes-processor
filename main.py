@@ -11,7 +11,7 @@ from fastapi import FastAPI, Query
 from fastapi.middleware.cors import CORSMiddleware
 from pyproj import CRS, Transformer
 
-app = FastAPI(title="Territoria GOES-19 Processor", version="5.0.0")
+app = FastAPI(title="Territoria GOES-19 Processor", version="5.1.0")
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -217,55 +217,13 @@ def extract(key, slat, slon, radius):
             ds.close()
 
 
-def merge_detections(scene_results):
-    """Deduplica puntos repetidos entre escenas y conserva el registro más útil."""
-    priorities = {
-        10: 6,
-        30: 6,
-        11: 5,
-        31: 5,
-        13: 4,
-        33: 4,
-        14: 3,
-        34: 3,
-        15: 2,
-        35: 2,
-        12: 1,
-        32: 1,
-    }
-    merged = {}
-
-    for detections in scene_results:
-        for detection in detections:
-            # Aproximadamente 100 m en latitud. Evita repetir el mismo foco
-            # en escenas consecutivas sin esconder focos claramente separados.
-            spatial_key = (
-                round(float(detection["lat"]), 3),
-                round(float(detection["lon"]), 3),
-            )
-            previous = merged.get(spatial_key)
-            if previous is None:
-                merged[spatial_key] = detection
-                continue
-
-            current_priority = priorities.get(int(detection.get("maskCode", 0)), 0)
-            previous_priority = priorities.get(int(previous.get("maskCode", 0)), 0)
-
-            if current_priority > previous_priority:
-                merged[spatial_key] = detection
-            elif current_priority == previous_priority:
-                if str(detection.get("time", "")) > str(previous.get("time", "")):
-                    merged[spatial_key] = detection
-
-    return sorted(merged.values(), key=lambda item: item["distanceKm"])
-
 
 @app.get("/")
 def root():
     return {
         "ok": True,
         "service": "Territoria GOES-19 Processor",
-        "version": "5.0.0",
+        "version": "5.1.0",
         "product": PRODUCT,
     }
 
@@ -297,7 +255,20 @@ def fires(
             detail = errors[0]["error"] if errors else "No se pudieron procesar escenas"
             raise RuntimeError(detail)
 
-        detections = merge_detections(scene_results)
+        # Sin deduplicación: devuelve absolutamente todos los registros
+        # de todas las escenas procesadas. Un mismo foco puede aparecer
+        # varias veces si persistió en escenas consecutivas.
+        detections = sorted(
+            [
+                detection
+                for scene_detections in scene_results
+                for detection in scene_detections
+            ],
+            key=lambda item: (
+                item.get("distanceKm", 999999),
+                item.get("time", ""),
+            ),
+        )
 
         return {
             "ok": True,
@@ -309,6 +280,7 @@ def fires(
             "total": len(detections),
             "returned": len(detections),
             "sceneFirePixels": scene_candidates,
+            "deduplicated": False,
             "processedScenes": len(scene_results),
             "requestedScenes": scenes,
             "radiusKm": radius,
