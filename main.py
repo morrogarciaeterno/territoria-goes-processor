@@ -12,9 +12,10 @@ from fastapi.middleware.cors import CORSMiddleware
 from pyproj import CRS, Transformer
 
 from gremlin_extension import register_gremlin_routes
+from alerts_extension import register_alert_routes
 
 
-app = FastAPI(title="Territoria GOES-19 Processor", version="6.1.0")
+app = FastAPI(title="Territoria GOES-19 Processor", version="6.2.0")
 
 app.add_middleware(
     CORSMiddleware,
@@ -25,6 +26,7 @@ app.add_middleware(
 )
 
 register_gremlin_routes(app)
+register_alert_routes(app)
 
 
 BUCKET = "noaa-goes19"
@@ -324,9 +326,9 @@ def root():
     return {
         "ok": True,
         "service": "Territoria GOES-19 Processor",
-        "version": "6.1.0",
-        "products": [FIRE_PRODUCT, GLM_PRODUCT, "GREMLIN"],
-        "routes": ["/fires", "/lightning", "/gremlin"],
+        "version": "6.2.0",
+        "products": [FIRE_PRODUCT, GLM_PRODUCT, "GREMLIN", "ALERTS"],
+        "routes": ["/fires", "/lightning", "/gremlin", "/alerts"],
     }
 
 
