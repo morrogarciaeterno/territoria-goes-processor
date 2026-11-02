@@ -6,3 +6,4 @@ xarray==2024.11.0
 h5netcdf==1.4.1
 h5py==3.12.1
 pyproj==3.7.0
+requests==2.34.2
